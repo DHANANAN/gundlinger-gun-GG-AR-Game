@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Gunslinger AR</title>
+
+<!-- MediaPipe (classic global scripts, load & execute before the module) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+<!-- Three.js as an ES module -->
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+
+<style>
+  :root{
+    --accent:#5eead4;
+    --accent2:#f472b6;
+    --warn:#fbbf24;
+    --danger:#fb7185;
+    --glass:rgba(20,24,38,0.45);
+    --glass-brd:rgba(255,255,255,0.14);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;overflow:hidden;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;color:#e8ecf4;}
+  body{
+    /* dark Unsplash background image, layered under everything */
+    background:
+      radial-gradient(120% 90% at 50% 0%, rgba(94,234,212,0.10), transparent 55%),
+      linear-gradient(180deg, rgba(6,8,16,0.55), rgba(4,5,12,0.88)),
+      url('https://images.unsplash.com/photo-1502134249126-9f3755a50d78?auto=format&fit=crop&w=1920&q=80') center/cover no-repeat fixed,
+      #05060c;
+    cursor:none;
+  }
+
+  #scene{position:fixed;inset:0;z-index:1;}
+
+  /* ===== HUD ===== */
+  .hud{position:fixed;z-index:5;pointer-events:none;}
+  .glass{
+    background:var(--glass);
+    border:1px solid var(--glass-brd);
+    border-radius:18px;
+    backdrop-filter:blur(14px) saturate(140%);
+    -webkit-backdrop-filter:blur(14px) saturate(140%);
+    box-shadow:0 8px 40px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+
+  #topbar{top:18px;left:50%;transform:translateX(-50%);display:flex;gap:14px;padding:12px 20px;align-items:center;}
+  .stat{display:flex;flex-direction:column;align-items:center;min-width:74px;}
+  .stat .label{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#9aa6c4;}
+  .stat .value{font-size:26px;font-weight:800;line-height:1;margin-top:3px;text-shadow:0 2px 12px rgba(0,0,0,.6);}
+  .stat .value.accent{color:var(--accent);}
+  .stat .value.warn{color:var(--warn);}
+  .sep{width:1px;height:34px;background:rgba(255,255,255,.12);}
+
+  #combo{top:96px;left:50%;transform:translateX(-50%);font-weight:900;font-size:30px;
+    color:var(--accent2);text-shadow:0 0 22px rgba(244,114,182,.7);opacity:0;transition:opacity .25s;}
+
+  /* Ammo / reload bottom-left */
+  #ammoPanel{left:18px;bottom:18px;padding:14px 18px;min-width:160px;}
+  #ammoDots{display:flex;gap:7px;margin-top:8px;flex-wrap:wrap;max-width:160px;}
+  .dot{width:14px;height:22px;border-radius:5px;background:linear-gradient(180deg,#fde68a,#f59e0b);
+    box-shadow:0 0 10px rgba(245,158,11,.6);}
+  .dot.spent{background:rgba(255,255,255,.10);box-shadow:none;}
+  #reloadBar{height:6px;border-radius:6px;background:rgba(255,255,255,.12);margin-top:10px;overflow:hidden;display:none;}
+  #reloadFill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),#22d3ee);}
+  #ammoHint{font-size:11px;color:#9aa6c4;margin-top:8px;}
+
+  /* Webcam preview bottom-right */
+  #camPanel{right:18px;bottom:18px;padding:10px;}
+  #camWrap{position:relative;width:220px;height:165px;border-radius:12px;overflow:hidden;background:#000;}
+  #cam,#camOverlay{position:absolute;inset:0;width:100%;height:100%;transform:scaleX(-1);}
+  #cam{object-fit:cover;opacity:.85;}
+  #camLabel{font-size:10px;letter-spacing:2px;color:#9aa6c4;text-transform:uppercase;margin:0 0 6px 2px;display:flex;justify-content:space-between;}
+  #gestureTag{color:var(--accent);font-weight:700;}
+
+  /* Crosshair */
+  #reticle{position:fixed;z-index:6;left:50%;top:50%;width:70px;height:70px;
+    transform:translate(-50%,-50%);pointer-events:none;transition:transform .04s linear;will-change:left,top;}
+  #reticle .ring{position:absolute;inset:0;border:2px solid var(--accent);border-radius:50%;opacity:.85;
+    box-shadow:0 0 16px rgba(94,234,212,.55),inset 0 0 12px rgba(94,234,212,.3);}
+  #reticle .ring.locked{border-color:var(--danger);box-shadow:0 0 22px rgba(251,113,133,.8),inset 0 0 14px rgba(251,113,133,.4);}
+  #reticle .dot-c{position:absolute;left:50%;top:50%;width:6px;height:6px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);}
+  #reticle i{position:absolute;background:var(--accent);}
+  #reticle i.t{left:50%;top:-10px;width:2px;height:14px;transform:translateX(-50%);}
+  #reticle i.b{left:50%;bottom:-10px;width:2px;height:14px;transform:translateX(-50%);}
+  #reticle i.l{top:50%;left:-10px;height:2px;width:14px;transform:translateY(-50%);}
+  #reticle i.r{top:50%;right:-10px;height:2px;width:14px;transform:translateY(-50%);}
+  #reticle.cocked .ring{border-style:solid;}
+  #reticle:not(.cocked) .ring{border-style:dashed;opacity:.45;}
+
+  /* Muzzle flash */
+  #flash{position:fixed;inset:0;z-index:7;background:radial-gradient(circle at center,rgba(255,240,200,.5),transparent 35%);
+    opacity:0;pointer-events:none;}
+
+  /* Floating hit text */
+  .pop-score{position:fixed;z-index:6;font-weight:900;font-size:22px;color:var(--accent);pointer-events:none;
+    text-shadow:0 0 14px rgba(94,234,212,.7);animation:floatUp .8s ease-out forwards;}
+  @keyframes floatUp{0%{transform:translate(-50%,0);opacity:1;}100%{transform:translate(-50%,-60px);opacity:0;}}
+
+  /* Overlays (start / loading / end) */
+  .screen{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;
+    flex-direction:column;text-align:center;padding:24px;cursor:auto;}
+  .card{max-width:520px;padding:36px 40px;border-radius:26px;}
+  .title{font-size:46px;font-weight:900;letter-spacing:1px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent;}
+  .subtitle{color:#aab3cc;margin-top:8px;font-size:15px;line-height:1.6;}
+  .howto{text-align:left;margin:22px auto 6px;max-width:380px;display:grid;gap:10px;}
+  .howto .row{display:flex;gap:12px;align-items:center;font-size:14px;color:#cdd4e6;}
+  .howto .ic{font-size:22px;width:34px;text-align:center;}
+  .btn{margin-top:24px;pointer-events:auto;border:none;cursor:pointer;font-size:17px;font-weight:800;
+    padding:14px 34px;border-radius:14px;color:#04121a;background:linear-gradient(90deg,var(--accent),#22d3ee);
+    box-shadow:0 10px 30px rgba(34,211,238,.35);transition:transform .12s, box-shadow .12s;}
+  .btn:hover{transform:translateY(-2px);box-shadow:0 14px 40px rgba(34,211,238,.5);}
+  .btn.ghost{background:transparent;border:1px solid var(--glass-brd);color:#e8ecf4;box-shadow:none;}
+  .spinner{width:46px;height:46px;border:4px solid rgba(255,255,255,.15);border-top-color:var(--accent);
+    border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 18px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .err{color:var(--danger);font-size:13px;margin-top:14px;max-width:380px;}
+  .hidden{display:none!important;}
+  .finalScore{font-size:64px;font-weight:900;color:var(--accent);margin:10px 0;text-shadow:0 0 30px rgba(94,234,212,.6);}
+  .muted{color:#7c87a3;font-size:12px;margin-top:18px;}
+</style>
+</head>
+<body>
+
+<div id="scene"></div>
+
+<!-- HUD -->
+<div id="topbar" class="hud glass">
+  <div class="stat"><span class="label">Score</span><span id="scoreV" class="value accent">0</span></div>
+  <div class="sep"></div>
+  <div class="stat"><span class="label">Hits</span><span id="hitsV" class="value">0</span></div>
+  <div class="sep"></div>
+  <div class="stat"><span class="label">Best</span><span id="bestV" class="value">0</span></div>
+  <div class="sep"></div>
+  <div class="stat"><span class="label">Time</span><span id="timeV" class="value warn">60</span></div>
+</div>
+
+<div id="combo" class="hud"></div>
+
+<div id="ammoPanel" class="hud glass">
+  <div style="font-size:11px;letter-spacing:2px;color:#9aa6c4;text-transform:uppercase;">Ammo</div>
+  <div id="ammoDots"></div>
+  <div id="reloadBar"><div id="reloadFill"></div></div>
+  <div id="ammoHint">✋ Open palm to reload</div>
+</div>
+
+<div id="camPanel" class="hud glass">
+  <div id="camLabel"><span>Hand Tracker</span><span id="gestureTag">—</span></div>
+  <div id="camWrap">
+    <video id="cam" autoplay playsinline muted></video>
+    <canvas id="camOverlay" width="220" height="165"></canvas>
+  </div>
+</div>
+
+<!-- Crosshair -->
+<div id="reticle" class="cocked">
+  <div class="ring"></div>
+  <div class="dot-c"></div>
+  <i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i>
+</div>
+
+<div id="flash"></div>
+
+<!-- Loading -->
+<div id="loadingScreen" class="screen">
+  <div class="card glass">
+    <div class="spinner"></div>
+    <div class="title" style="font-size:30px;">Loading Gunslinger AR</div>
+    <div class="subtitle" id="loadMsg">Booting hand-tracking engine…</div>
+  </div>
+</div>
+
+<!-- Start -->
+<div id="startScreen" class="screen hidden">
+  <div class="card glass">
+    <div class="title">GUNSLINGER&nbsp;AR</div>
+    <div class="subtitle">Make a finger-gun. Aim with your index finger.<br/>Drop your thumb to fire. Pop every balloon.</div>
+    <div class="howto">
+      <div class="row"><span class="ic">👉</span> Point your <b>index finger</b> — the crosshair follows it.</div>
+      <div class="row"><span class="ic">👍</span> Keep your <b>thumb up</b> to cock the hammer.</div>
+      <div class="row"><span class="ic">🔫</span> <b>Drop the thumb</b> down to shoot.</div>
+      <div class="row"><span class="ic">✋</span> <b>Open palm</b> (or press R) to reload.</div>
+    </div>
+    <button id="startBtn" class="btn">Enable Camera & Play</button>
+    <div id="startErr" class="err"></div>
+  </div>
+</div>
+
+<!-- Game over -->
+<div id="endScreen" class="screen hidden">
+  <div class="card glass">
+    <div class="title" style="font-size:34px;">Time's Up, Gunslinger</div>
+    <div class="finalScore" id="finalScore">0</div>
+    <div class="subtitle"><span id="endHits">0</span> balloons popped · best combo x<span id="endCombo">0</span> · accuracy <span id="endAcc">0</span>%</div>
+    <button id="againBtn" class="btn">Play Again</button>
+    <div class="muted">Tip: hold a steady finger-gun pose for the best tracking.</div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ============================================================
+   GUNSLINGER AR  — single-file build
+   Three.js balloons + particles | MediaPipe Hands aiming
+   Web Audio SFX | glassmorphism HUD
+============================================================ */
+
+// ---------- DOM ----------
+const $ = id => document.getElementById(id);
+const sceneEl   = $('scene');
+const reticle   = $('reticle');
+const ringEl    = reticle.querySelector('.ring');
+const flashEl   = $('flash');
+const camVideo  = $('cam');
+const overlay   = $('camOverlay');
+const octx      = overlay.getContext('2d');
+const gestureTag= $('gestureTag');
+
+const ui = {
+  score:$('scoreV'), hits:$('hitsV'), best:$('bestV'), time:$('timeV'),
+  combo:$('combo'), ammoDots:$('ammoDots'), reloadBar:$('reloadBar'),
+  reloadFill:$('reloadFill'), ammoHint:$('ammoHint'),
+};
+
+// ---------- Game config / state ----------
+const CFG = {
+  roundTime: 60,
+  maxAmmo: 6,
+  reloadTime: 1300,   // ms
+  maxBalloons: 9,
+  spawnEvery: 700,    // ms
+};
+const G = {
+  running:false, score:0, hits:0, shots:0, time:CFG.roundTime,
+  combo:0, bestCombo:0, ammo:CFG.maxAmmo, reloading:false, reloadStart:0,
+  best:Number(localStorage.getItem('gunslinger_best')||0),
+};
+ui.best.textContent = G.best;
+
+// Smoothed crosshair position (screen px) + raw target
+const aim = { x:innerWidth/2, y:innerHeight/2, tx:innerWidth/2, ty:innerHeight/2, present:false };
+let thumbCocked = true;   // hammer state
+let canFire = true;       // requires re-cock between shots
+let openPalm = false;
+
+/* ============================================================
+   AUDIO  — synthesized Web Audio SFX
+============================================================ */
+let AC = null;
+function audio(){ if(!AC){ AC = new (window.AudioContext||window.webkitAudioContext)(); } return AC; }
+
+function sfxShoot(){
+  const ac=audio(), t=ac.currentTime;
+  // descending "pew" (sawtooth) + click body
+  const o=ac.createOscillator(), g=ac.createGain();
+  o.type='sawtooth'; o.frequency.setValueAtTime(880,t); o.frequency.exponentialRampToValueAtTime(180,t+0.12);
+  g.gain.setValueAtTime(0.28,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.14);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t+0.15);
+  // noise transient
+  noiseBurst(0.06,0.18,1800,'highpass');
+}
+function sfxPop(color){
+  const ac=audio(), t=ac.currentTime;
+  // bright tone + airy noise = balloon pop
+  const o=ac.createOscillator(), g=ac.createGain();
+  o.type='triangle'; o.frequency.setValueAtTime(520,t); o.frequency.exponentialRampToValueAtTime(120,t+0.18);
+  g.gain.setValueAtTime(0.3,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.22);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t+0.24);
+  noiseBurst(0.22,0.2,900,'lowpass');
+}
+function sfxEmpty(){
+  const ac=audio(), t=ac.currentTime;
+  const o=ac.createOscillator(), g=ac.createGain();
+  o.type='square'; o.frequency.setValueAtTime(140,t);
+  g.gain.setValueAtTime(0.12,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.05);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t+0.06);
+}
+function sfxReload(){
+  const ac=audio(), t=ac.currentTime;
+  [0,0.18].forEach((d,i)=>{
+    const o=ac.createOscillator(), g=ac.createGain();
+    o.type='square'; o.frequency.setValueAtTime(i?340:220,t+d);
+    g.gain.setValueAtTime(0.14,t+d); g.gain.exponentialRampToValueAtTime(0.001,t+d+0.08);
+    o.connect(g).connect(ac.destination); o.start(t+d); o.stop(t+d+0.1);
+  });
+}
+function noiseBurst(vol,dur,freq,type){
+  const ac=audio(), t=ac.currentTime;
+  const n=Math.floor(ac.sampleRate*dur);
+  const buf=ac.createBuffer(1,n,ac.sampleRate);
+  const d=buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,1.5);
+  const src=ac.createBufferSource(); src.buffer=buf;
+  const f=ac.createBiquadFilter(); f.type=type; f.frequency.value=freq;
+  const g=ac.createGain(); g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  src.connect(f).connect(g).connect(ac.destination); src.start(t);
+}
+
+/* ============================================================
+   THREE.JS SCENE
+============================================================ */
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+sceneEl.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0,0,12);
+
+scene.add(new THREE.AmbientLight(0xb8c6ff, 0.65));
+const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(4,8,10); scene.add(key);
+const rim = new THREE.PointLight(0x5eead4, 1.4, 60); rim.position.set(-8,-4,8); scene.add(rim);
+const rim2= new THREE.PointLight(0xf472b6, 1.1, 60); rim2.position.set(8,6,4);  scene.add(rim2);
+
+const PALETTE = [0xfb7185,0x5eead4,0xfbbf24,0xa78bfa,0x60a5fa,0x34d399,0xf472b6,0xfb923c];
+
+// shared geometries
+const balloonGeo = new THREE.SphereGeometry(1, 32, 32);
+const knotGeo    = new THREE.ConeGeometry(0.22, 0.4, 12);
+const partGeo    = new THREE.IcosahedronGeometry(0.16, 0);
+
+const balloons = [];
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+
+function spawnBalloon(){
+  if(balloons.length >= CFG.maxBalloons) return;
+  const color = PALETTE[(Math.random()*PALETTE.length)|0];
+  const mat = new THREE.MeshStandardMaterial({
+    color, roughness:0.25, metalness:0.0,
+    emissive:color, emissiveIntensity:0.18,
+    transparent:true, opacity:0.96,
+  });
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(balloonGeo, mat);
+  body.scale.set(1,1.18,1);              // egg-ish balloon shape
+  group.add(body);
+  const knot = new THREE.Mesh(knotGeo, mat);
+  knot.position.y = -1.18; knot.rotation.x = Math.PI; group.add(knot);
+  // little specular highlight sphere
+  const hl = new THREE.Mesh(new THREE.SphereGeometry(0.28,12,12),
+    new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.4}));
+  hl.position.set(-0.35,0.45,0.78); group.add(hl);
+
+  const span = 9;
+  group.position.set((Math.random()*2-1)*span, -7 - Math.random()*3, (Math.random()*2-1)*3);
+  const scale = 0.55 + Math.random()*0.5;
+  group.scale.setScalar(scale);
+  group.userData = {
+    color,
+    vy: 0.012 + Math.random()*0.022,
+    bob: Math.random()*Math.PI*2,
+    drift: (Math.random()*2-1)*0.006,
+    spin: (Math.random()*2-1)*0.01,
+    radius: scale*1.1,
+    points: Math.round((1.1-scale)*60)+20,   // smaller = more points
+  };
+  scene.add(group);
+  balloons.push(group);
+}
+
+function removeBalloon(b){
+  scene.remove(b);
+  const i=balloons.indexOf(b); if(i>=0) balloons.splice(i,1);
+}
+
+// ---------- Particles ----------
+const particles = [];
+function explode(pos, color){
+  const N = 20;
+  for(let i=0;i<N;i++){
+    const mat = new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:0.6,
+      transparent:true, opacity:1, roughness:0.4});
+    const m = new THREE.Mesh(partGeo, mat);
+    m.position.copy(pos);
+    const dir = new THREE.Vector3(Math.random()*2-1, Math.random()*2-1, Math.random()*2-1).normalize();
+    const speed = 0.08 + Math.random()*0.14;
+    m.userData = { vel: dir.multiplyScalar(speed), life:1, rot:new THREE.Vector3(Math.random(),Math.random(),Math.random()) };
+    m.scale.setScalar(0.6+Math.random()*0.8);
+    scene.add(m); particles.push(m);
+  }
+}
+function updateParticles(dt){
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i], u=p.userData;
+    p.position.addScaledVector(u.vel, dt*60);
+    u.vel.y -= 0.006*dt*60;          // gravity
+    u.vel.multiplyScalar(0.97);
+    p.rotation.x += u.rot.x*0.2; p.rotation.y += u.rot.y*0.2;
+    u.life -= dt*1.6;
+    p.material.opacity = Math.max(u.life,0);
+    p.scale.multiplyScalar(0.97);
+    if(u.life<=0){ scene.remove(p); particles.splice(i,1); }
+  }
+}
+
+/* ============================================================
+   FIRING / RAYCAST
+============================================================ */
+function screenToNDC(x,y){ ndc.x=(x/innerWidth)*2-1; ndc.y=-(y/innerHeight)*2+1; return ndc; }
+
+function fire(){
+  if(!G.running) return;
+  if(G.reloading) return;
+  if(G.ammo<=0){ sfxEmpty(); flashAmmoEmpty(); return; }
+
+  G.ammo--; G.shots++; renderAmmo();
+  sfxShoot(); muzzleFlash();
+
+  raycaster.setFromCamera(screenToNDC(aim.x,aim.y), camera);
+  // generous hit test: check against balloon bounding spheres
+  let hit=null, hitDist=Infinity;
+  for(const b of balloons){
+    const sph = new THREE.Sphere(b.position.clone(), b.userData.radius*1.15);
+    const pt = new THREE.Vector3();
+    if(raycaster.ray.intersectSphere(sph, pt)){
+      const d = pt.distanceTo(camera.position);
+      if(d<hitDist){ hitDist=d; hit=b; }
+    }
+  }
+
+  if(hit){
+    G.hits++; G.combo++; G.bestCombo=Math.max(G.bestCombo,G.combo);
+    const mult = 1 + Math.floor(G.combo/3)*0.5;
+    const gained = Math.round(hit.userData.points * mult);
+    G.score += gained;
+    explode(hit.position, hit.userData.color);
+    sfxPop();
+    removeBalloon(hit);
+    popScore(aim.x, aim.y, '+'+gained);
+    showCombo();
+    syncStats();
+    if(G.ammo<=0) startReload();
+  } else {
+    G.combo=0; showCombo();
+  }
+}
+
+/* ============================================================
+   RELOAD
+============================================================ */
+function startReload(){
+  if(G.reloading || G.ammo>=CFG.maxAmmo) return;
+  G.reloading=true; G.reloadStart=performance.now();
+  sfxReload();
+  ui.reloadBar.style.display='block';
+  ui.ammoHint.textContent='Reloading…';
+}
+function updateReload(now){
+  if(!G.reloading) return;
+  const p=Math.min((now-G.reloadStart)/CFG.reloadTime,1);
+  ui.reloadFill.style.width=(p*100)+'%';
+  if(p>=1){
+    G.reloading=false; G.ammo=CFG.maxAmmo; renderAmmo();
+    ui.reloadBar.style.display='none'; ui.reloadFill.style.width='0';
+    ui.ammoHint.textContent='✋ Open palm to reload';
+  }
+}
+
+/* ============================================================
+   HUD helpers
+============================================================ */
+function renderAmmo(){
+  ui.ammoDots.innerHTML='';
+  for(let i=0;i<CFG.maxAmmo;i++){
+    const d=document.createElement('div');
+    d.className='dot'+(i>=G.ammo?' spent':'');
+    ui.ammoDots.appendChild(d);
+  }
+}
+function syncStats(){
+  ui.score.textContent=G.score; ui.hits.textContent=G.hits;
+  if(G.score>G.best){ G.best=G.score; ui.best.textContent=G.best; }
+}
+let comboTimer=null;
+function showCombo(){
+  if(G.combo>=2){ ui.combo.textContent='COMBO x'+G.combo; ui.combo.style.opacity='1'; }
+  else ui.combo.style.opacity='0';
+  clearTimeout(comboTimer);
+  comboTimer=setTimeout(()=>ui.combo.style.opacity='0',1100);
+}
+function popScore(x,y,txt){
+  const e=document.createElement('div');
+  e.className='pop-score'; e.textContent=txt; e.style.left=x+'px'; e.style.top=(y-40)+'px';
+  document.body.appendChild(e); setTimeout(()=>e.remove(),800);
+}
+function muzzleFlash(){
+  flashEl.style.opacity='1';
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{flashEl.style.transition='opacity .14s';flashEl.style.opacity='0';
+    setTimeout(()=>flashEl.style.transition='',160);}));
+}
+function flashAmmoEmpty(){
+  ui.ammoHint.textContent='Empty! ✋ open palm to reload';
+  ui.ammoHint.style.color='var(--danger)';
+  setTimeout(()=>{ui.ammoHint.style.color='';ui.ammoHint.textContent='✋ Open palm to reload';},900);
+}
+
+/* ============================================================
+   MEDIAPIPE HANDS
+============================================================ */
+const HAND_CONNECTIONS = (window.HAND_CONNECTIONS) || [
+  [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]
+];
+
+let hands=null, mpCamera=null;
+
+function dist(a,b){ const dx=a.x-b.x,dy=a.y-b.y; return Math.hypot(dx,dy); }
+
+function onResults(res){
+  octx.save();
+  octx.clearRect(0,0,overlay.width,overlay.height);
+
+  if(res.multiHandLandmarks && res.multiHandLandmarks.length){
+    const lm = res.multiHandLandmarks[0];
+
+    // draw skeleton (drawing_utils may be unavailable -> manual fallback)
+    drawHand(lm);
+
+    // ---- AIM: index fingertip (8). Mirror X for natural movement ----
+    const tip = lm[8];
+    aim.tx = (1 - tip.x) * innerWidth;
+    aim.ty = tip.y * innerHeight;
+    aim.present = true;
+
+    // scale-invariant reference (wrist -> index MCP)
+    const ref = Math.max(dist(lm[0], lm[5]), 0.0001);
+
+    // ---- THUMB cocked / fire ----
+    // "up" = thumb tip well above index MCP (smaller y). Drop it to fire.
+    const thumbUpAmt = (lm[5].y - lm[4].y) / ref;   // positive when thumb above index knuckle
+    const COCK = 0.55, FIRE = 0.12;
+    if(thumbUpAmt > COCK){ thumbCocked = true; canFire = true; }
+    if(thumbCocked && canFire && thumbUpAmt < FIRE){
+      canFire=false; thumbCocked=false; fire();
+    }
+
+    // ---- OPEN PALM (reload): count extended fingers ----
+    const ext = countExtended(lm);
+    openPalm = ext>=4;
+    if(openPalm && !G.reloading && G.ammo<CFG.maxAmmo) startReload();
+
+    gestureTag.textContent = openPalm ? 'RELOAD ✋' : (thumbCocked ? 'COCKED 👍' : 'FIRING 🔫');
+  } else {
+    aim.present=false;
+    gestureTag.textContent='no hand';
+  }
+  octx.restore();
+}
+
+function countExtended(lm){
+  // fingers point up when tip.y < pip.y (image y grows downward)
+  let n=0;
+  const pairs=[[8,6],[12,10],[16,14],[20,18]];
+  for(const [t,p] of pairs) if(lm[t].y < lm[p].y - 0.02) n++;
+  // thumb extended sideways
+  if(Math.abs(lm[4].x - lm[2].x) > 0.06) n++;
+  return n;
+}
+
+function drawHand(lm){
+  const W=overlay.width, H=overlay.height;
+  // connections
+  octx.strokeStyle='rgba(94,234,212,0.85)'; octx.lineWidth=2.5;
+  for(const [a,b] of HAND_CONNECTIONS){
+    octx.beginPath();
+    octx.moveTo(lm[a].x*W, lm[a].y*H);
+    octx.lineTo(lm[b].x*W, lm[b].y*H);
+    octx.stroke();
+  }
+  // joints
+  for(let i=0;i<lm.length;i++){
+    octx.beginPath();
+    octx.fillStyle = (i===8) ? '#f472b6' : (i===4 ? '#fbbf24' : '#e8ecf4');
+    const r = (i===8||i===4) ? 5 : 3;
+    octx.arc(lm[i].x*W, lm[i].y*H, r, 0, Math.PI*2);
+    octx.fill();
+  }
+}
+
+async function initHands(){
+  hands = new window.Hands({ locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+  hands.setOptions({ maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.6, minTrackingConfidence:0.6 });
+  hands.onResults(onResults);
+  mpCamera = new window.Camera(camVideo, {
+    onFrame: async ()=>{ await hands.send({ image: camVideo }); },
+    width:640, height:480,
+  });
+  await mpCamera.start();
+}
+
+/* ============================================================
+   MAIN LOOP
+============================================================ */
+let last=performance.now(), spawnAcc=0, secAcc=0;
+function loop(now){
+  requestAnimationFrame(loop);
+  const dt=Math.min((now-last)/1000, 0.05); last=now;
+
+  // crosshair smoothing
+  aim.x += (aim.tx-aim.x)*0.35;
+  aim.y += (aim.ty-aim.y)*0.35;
+  reticle.style.left=aim.x+'px'; reticle.style.top=aim.y+'px';
+  reticle.classList.toggle('cocked', thumbCocked);
+
+  // hover lock highlight
+  let hover=false;
+  if(G.running){
+    raycaster.setFromCamera(screenToNDC(aim.x,aim.y), camera);
+    for(const b of balloons){
+      const sph=new THREE.Sphere(b.position.clone(), b.userData.radius*1.15);
+      if(raycaster.ray.intersectSphere(sph, new THREE.Vector3())){ hover=true; break; }
+    }
+  }
+  ringEl.classList.toggle('locked', hover);
+
+  if(G.running){
+    // timers
+    spawnAcc+=dt*1000; secAcc+=dt;
+    if(spawnAcc>=CFG.spawnEvery){ spawnAcc=0; spawnBalloon(); }
+    if(secAcc>=1){ secAcc-=1; G.time--; ui.time.textContent=Math.max(G.time,0);
+      if(G.time<=0) endGame(); }
+
+    updateReload(now);
+
+    // balloon motion
+    for(let i=balloons.length-1;i>=0;i--){
+      const b=balloons[i], u=b.userData;
+      b.position.y += u.vy*60*dt;
+      u.bob += dt*2;
+      b.position.x += (u.drift + Math.sin(u.bob)*0.004)*60*dt;
+      b.rotation.z = Math.sin(u.bob)*0.12;
+      b.rotation.y += u.spin*60*dt;
+      if(b.position.y > 9){ removeBalloon(b); G.combo=0; }  // escaped
+    }
+  }
+
+  updateParticles(dt);
+  renderer.render(scene, camera);
+}
+
+/* ============================================================
+   GAME FLOW
+============================================================ */
+function resetGame(){
+  G.running=false; G.score=0; G.hits=0; G.shots=0; G.time=CFG.roundTime;
+  G.combo=0; G.bestCombo=0; G.ammo=CFG.maxAmmo; G.reloading=false;
+  [...balloons].forEach(removeBalloon);
+  [...particles].forEach(p=>scene.remove(p)); particles.length=0;
+  ui.reloadBar.style.display='none'; ui.reloadFill.style.width='0';
+  ui.ammoHint.style.color=''; ui.ammoHint.textContent='✋ Open palm to reload';
+  syncStats(); ui.time.textContent=G.time; renderAmmo();
+}
+function startGame(){
+  resetGame();
+  G.running=true; spawnAcc=0; secAcc=0;
+  for(let i=0;i<4;i++) spawnBalloon();
+}
+function endGame(){
+  G.running=false;
+  if(G.score>Number(localStorage.getItem('gunslinger_best')||0))
+    localStorage.setItem('gunslinger_best', G.score);
+  $('finalScore').textContent=G.score;
+  $('endHits').textContent=G.hits;
+  $('endCombo').textContent=G.bestCombo;
+  $('endAcc').textContent = G.shots? Math.round(G.hits/G.shots*100):0;
+  $('endScreen').classList.remove('hidden');
+}
+
+/* ============================================================
+   BOOT
+============================================================ */
+async function boot(){
+  // start render loop immediately (balloons idle in background)
+  requestAnimationFrame(loop);
+
+  // wait for MediaPipe globals to be present
+  let tries=0;
+  while((!window.Hands || !window.Camera) && tries<60){ await new Promise(r=>setTimeout(r,100)); tries++; }
+  if(!window.Hands || !window.Camera){
+    showStartError('Could not load the hand-tracking library. Check your internet connection and reload.');
+    return;
+  }
+  $('loadingScreen').classList.add('hidden');
+  $('startScreen').classList.remove('hidden');
+}
+
+function showStartError(msg){
+  $('loadingScreen').classList.add('hidden');
+  $('startScreen').classList.remove('hidden');
+  $('startErr').textContent=msg;
+}
+
+$('startBtn').addEventListener('click', async ()=>{
+  $('startErr').textContent='';
+  $('startBtn').disabled=true; $('startBtn').textContent='Starting camera…';
+  try{
+    audio().resume();           // unlock audio on user gesture
+    await initHands();          // requests camera permission
+    $('startScreen').classList.add('hidden');
+    startGame();
+  }catch(e){
+    console.error(e);
+    $('startBtn').disabled=false; $('startBtn').textContent='Enable Camera & Play';
+    $('startErr').textContent='Camera access failed: '+(e?.message||e)+'. Allow camera permission and try again.';
+  }
+});
+
+$('againBtn').addEventListener('click', ()=>{ $('endScreen').classList.add('hidden'); startGame(); });
+
+// keyboard fallbacks (handy for testing without a hand)
+addEventListener('keydown', e=>{
+  if(e.code==='Space'){ e.preventDefault(); fire(); }
+  if(e.key==='r'||e.key==='R'){ startReload(); }
+});
+// mouse as a backup aim/fire so it's playable even before tracking locks
+addEventListener('mousemove', e=>{ if(!aim.present){ aim.tx=e.clientX; aim.ty=e.clientY; } });
+addEventListener('mousedown', ()=>{ if(!aim.present) fire(); });
+
+addEventListener('resize', ()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+renderAmmo();
+boot();
+</script>
+</body>
+</html>
